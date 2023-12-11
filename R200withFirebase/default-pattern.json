@@ -1,0 +1,35 @@
+{
+  "DATA": {
+    "No1": {
+      "CurrentFloor": 1,
+      "EPC": "E2 00 47 02 FE A0 64 26 01 02 03 04",
+      "Status": false
+    },
+    "No2": {
+      "CurrentFloor": 1,
+      "EPC": "E2 00 47 02 F6 20 64 26 53 C1 01 11",
+      "Status": false
+    },
+    "No3": {
+      "CurrentFloor": 1,
+      "EPC": "E2 00 47 02 E8 E0 64 26 52 ED 01 12",
+      "Status": false
+    },
+    "No4": {
+      "CurrentFloor": 1,
+      "EPC": "E2 00 47 02 ED 60 64 26 53 35 01 0E",
+      "Status": false
+    },
+    "No5": {
+      "CurrentFloor": 1,
+      "EPC": "E2 00 47 02 CB E0 64 26 51 1D 01 0C",
+      "Status": false
+    }
+  },
+  "SETTING": {
+    "BUADRATE": 11520,
+    "HZ": 902.55,
+    "POWER": 18.5,
+    "REGION": "US"
+  }
+}
