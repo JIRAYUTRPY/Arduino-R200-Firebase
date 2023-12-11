@@ -31,5 +31,22 @@
     "HZ": 902.55,
     "POWER": 18.5,
     "REGION": "US"
+  },
+  "lastUpdate": {
+    "Module1": {
+      "ConnectedStatus": false,
+      "floorOperation": 1,
+      "lastTimeConnected": ""
+    },
+    "Module2": {
+      "ConnectedStatus": false,
+      "floorOperation": 2,
+      "lastTimeConnected": ""
+    },
+    "Module3": {
+      "ConnectedStatus": false,
+      "floorOperation": 3,
+      "lastTimeConnected": ""
+    }
   }
 }
