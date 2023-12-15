@@ -1,11 +1,14 @@
 #include "ESP8266WiFi.h"
 #include "FirebaseESP8266.h"
-
+#include "ESP8266HTTPClient.h"
+#include "EEPROM.h"
 #define FIREBASE_HOST ""
 #define FIREBASE_AUTH ""
 #define WIFI_SSID ""
 #define WIFI_PASSWORD ""
 FirebaseData firebaseDataReader;
+FirebaseData firebaseSettingReader;
+FirebaseJson firebaseJsonData;
 ///****** R200 Commamnd *******///
 //*Inventory
 unsigned char ReadMulti[10] =   {0XAA,0X00,0X27,0X00,0X03,0X22,0XFF,0XFF,0X4A,0XDD};
@@ -26,24 +29,35 @@ unsigned int dataAdd = 0;
 unsigned int incomedate = 0;
 unsigned int parState = 0;
 unsigned int codeState = 0;
-unsigned int totalTag = 88;
-unsigned int moduleNumber = 2;
-String path = "/DATA";
+String path = "records/";
 String lastEpc = "";
 String state = "init";
-String mechineNumber = "1";
+String mechineNumber = "";
+bool firebaseError = false;
 bool display = false;
+int address = 0;
+int lastEpcNumber = 1;
+int currentFloor = 1;
+int bedNumber = 1;
 //***********************************//
 
 void setup() {
+  EEPROM.begin(512);
   pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(112500);
+  while(1){
+    if(Serial.available() > 0){
+        break;
+    }else{
+      Serial.println("Please Enter any character for next step");
+    }
+  }
   Serial.println("R200 with Firebase - Bed tracking.");
   Serial.println("************* WIFI Sys Init **************");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("connecting");
+  Serial.print("Scaning..");
   while (WiFi.status() != WL_CONNECTED) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print(".");
     delay(500);
   }
@@ -53,11 +67,45 @@ void setup() {
   Serial.println("************* Firebase Interface Init **************");
   Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
   Firebase.reconnectWiFi(true);
-  if (!Firebase.beginStream(firebaseDataReader, path + "/"))
-  {
-      Serial.println("Could not begin stream");
-      Serial.println("REASON: " + firebaseDataReader.errorReason());
-      Serial.println();
+  String readMechine = EEPROM_read(address, 10);
+  bool readEEPROMFinish = true;
+  if(readMechine.length() > 1){
+      while(readEEPROMFinish){
+          if(EEPROM_read(address, 1) != 0){
+            mechineNumber = mechineNumber + EEPROM_read(address, 1);
+            address++;
+          }else{
+            readEEPROMFinish = false;
+          }
+      }
+  }else{
+    FirebaseJson firebaseSettingJsonData;
+    firebaseSettingJsonData.set("buad rate", 115200);
+    firebaseSettingJsonData.set("region", "US");
+    firebaseSettingJsonData.set("pa pwer", "18.5dBM");
+    firebaseSettingJsonData.set("RFCH", "902.25MHz");
+    firebaseSettingJsonData.set("EEPROM address", address);
+    firebaseSettingJsonData.set("floor" ,1);
+    if(Firebase.pushJSON(firebaseSettingReader, "/setting", firebaseSettingJsonData)){
+      mechineNumber = firebaseSettingReader.pushName();
+      int lenMsg = EEPROM_write(address, mechineNumber);
+      Serial.println("Mechine Number on EEPROM : " + EEPROM_read(address, lenMsg));
+    }else{
+      firebaseError = true;
+      while(firebaseError){
+        Serial.println("Firebase Error: " + firebaseSettingReader.errorReason() + " | please reset broad");
+        delay(1000);
+      }
+    }
+  }
+  
+  if (!Firebase.beginStream(firebaseSettingReader, "/setting")){
+    Serial.println("Could not begin stream");
+    Serial.println("REASON: " + firebaseSettingReader.errorReason());
+    Serial.println();
+  }else{
+    Serial.println("Firebase Streaming on setting path");
+    Serial.println();
   }
   Serial.println("");
   Serial.println("***************  Default setting  ***************");
@@ -78,37 +126,164 @@ void setup() {
       Serial.println("'");
     }
   }
+  Serial.println();
 }
 
 void loop() {
   if(state == "init"){
     changeState();
-  }else if(state == "db"){
-    if(Firebase.ready()){
-      
-    }else{
-      Serial.println("Firebase not ready");
-    }
-  }else if(state == "read"){    
+  }else if(state == "d"){
     lastEpc = read();
-    if(lastEpc != "wait" || lastEpc != ""){
-      Serial.println(lastEpc);
+    if(lastEpc != "wait" && lastEpc != ""){
+      if(Firebase.ready()){
+        putEpc(lastEpc);
+      }else{
+        Serial.println("Firebase not ready");
+        Serial.println();
+        state = "init";
+      }          
+    }
+    changeState();
+  }else if(state == "r"){    
+    lastEpc = read();
+    if(lastEpc != "wait" && lastEpc != ""){
+      if(Firebase.ready()){
+        updateEpc(lastEpc);
+      }else{
+        Serial.println("Firebase not ready");
+        Serial.println();
+        state = "init";
+      }          
     }
   }
 }
 
+int wifiScan() {
+  String ssid;
+  int32_t rssi;
+  uint8_t encryptionType;
+  uint8_t *bssid;
+  int32_t channel;
+  bool hidden;
+  int scanResult;
+
+  Serial.println(F("Starting WiFi scan..."));
+
+  scanResult = WiFi.scanNetworks(/*async=*/false, /*hidden=*/true);
+
+  if (scanResult == 0) {
+    Serial.println(F("No networks found"));
+  } else if (scanResult > 0) {
+    Serial.printf(PSTR("%d networks found:\n"), scanResult);
+
+    // Print unsorted scan results
+    for (int8_t i = 0; i < scanResult; i++) {
+      WiFi.getNetworkInfo(i, ssid, encryptionType, rssi, bssid, channel, hidden);
+
+      // get extra info
+      const bss_info *bssInfo = WiFi.getScanInfoByIndex(i);
+      String phyMode;
+      const char *wps = "";
+      if (bssInfo) {
+        phyMode.reserve(12);
+        phyMode = F("802.11");
+        String slash;
+        if (bssInfo->phy_11b) {
+          phyMode += 'b';
+          slash = '/';
+        }
+        if (bssInfo->phy_11g) {
+          phyMode += slash + 'g';
+          slash = '/';
+        }
+        if (bssInfo->phy_11n) {
+          phyMode += slash + 'n';
+        }
+        if (bssInfo->wps) {
+          wps = PSTR("WPS");
+        }
+      }
+      Serial.printf(PSTR("  %02d: [CH %02d] [%02X:%02X:%02X:%02X:%02X:%02X] %ddBm %c %c %-11s %3S %s\n"), i, channel, bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5], rssi, (encryptionType == ENC_TYPE_NONE) ? ' ' : '*', hidden ? 'H' : 'V', phyMode.c_str(), wps, ssid.c_str());
+      yield();
+    }
+  } else {
+    Serial.printf(PSTR("WiFi scan error %d"), scanResult);
+  }
+
+  // Wait a bit before scanning again
+  delay(5000);
+  return scanResult;
+}
+
+String EEPROM_read(int index, int length){
+  String text = "";
+  char ch = 1;
+  for(int i = index ; (i< (index + length)) && ch; ++i ){
+    text.concat(ch);
+  }
+  return text;
+}
+
+int EEPROM_write(int index, String text){
+  for(int i = index ; i < text.length() + index ; i++){
+    EEPROM.write(i, text[i - index]);    
+  }
+  EEPROM.write(index + text.length(), 0);
+  EEPROM.commit();
+  return text.length() + 1; 
+}
+
+void putEpc(String data){
+  FirebaseJson epcJsonData;
+  epcJsonData.set("tag number", lastEpcNumber);
+  epcJsonData.set("current floor", 1);
+  epcJsonData.set("status", false);
+  epcJsonData.set("bed number", bedNumber);
+  if(Firebase.setJSON(firebaseDataReader, path + data , epcJsonData)){
+    Serial.println("Firebase Created");
+    Serial.println();
+    lastEpcNumber ++;
+    if(lastEpcNumber % 2 == 0){
+      bedNumber++;
+    }
+  }else{
+    Serial.println("Cannot Created");
+    Serial.println("Firebase Reason: " + firebaseDataReader.errorReason());
+    Serial.println();
+  }
+}
+
+void updateEpc(String data){
+  FirebaseJson epcJsonData;
+  epcJsonData.set("current floor", currentFloor);
+  epcJsonData.set("status", !Firebase.getBool(firebaseDataReader, path + data));
+  if(Firebase.updateNode(firebaseDataReader, path + data, epcJsonData)){
+    Serial.println("Firebase Updated");
+    Serial.println();
+  }else{
+    Serial.println("Cannot Updated");
+    Serial.println("Firebase Reason: " + firebaseDataReader.errorReason());
+    Serial.println();
+  }  
+}
+
 void changeState(){
-  if(Serial.available() > 0){
-      display = true;
-      state = Serial.read();          
-  }
   if(state == "init" && display == true){
-    Serial.println("Current State : init | Select State working: db or read");
+    Serial.println("Current State : init | Select State working: db(d) or read(r)");
+    Serial.println();
     display = false;
+  }else if(state == "d" && display == true){
+    Serial.println("Current State :  db  | Select State working: read(r)");
+    Serial.println();
+    display = false;
+  }else{
+    Serial.print("Please enter (d) or (r)");
+    Serial.println();
+    state = "init";
   }
-  if(state == "db" && display == true){
-    Serial.println("Current State :  db  | Select State working: read");
-    display = false;
+  if(Serial.available() > 0){
+      state = Serial.read();   
+      display = true;       
   }
 }
 
@@ -168,14 +343,15 @@ String multipleReading(){
         dataAdd= 0;
         parState = 0;
         codeState = 0;
+        return epc;
         }
     }
      else{
       dataAdd= 0;
       parState = 0;
       codeState = 0;
+      return "wait";
     }
-    return epc;
   }
   return "wait";
 }
