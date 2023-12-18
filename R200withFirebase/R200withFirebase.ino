@@ -11,20 +11,23 @@ SoftwareSerial R200Serial(D3, D4);
 #define EEPROM_SIZE 512
 ///****** R200 Commamnd *******///
 //*Inventory
-unsigned char ReadMulti[10]   =   {0XAA,0X00,0X27,0X00,0X03,0X22,0XFF,0XFF,0X4A,0XDD};
-unsigned char stopRead[7]     =   {0XAA,0x00,0X28,0X00,0X00,0X28,0XDD};
+//*AA 00 0E 00 02 10 08 28 DD 
+byte ReadSingle[9]    =   {0XAA,0XAA,0X0E,0X00,0X02,0X10,0X08,0X28,0XDD};
+byte ReadMulti[10]   =   {0XAA,0X00,0X27,0X00,0X03,0X22,0XFF,0XFF,0X4A,0XDD};
+byte stopRead[7]     =   {0XAA,0x00,0X28,0X00,0X00,0X28,0XDD};
 //*Mode
-unsigned char DenseMode[8]    =   {0XAA,0X00,0XF5,0X00,0X01,0X01,0XF7,0XDD};
+byte DenseMode[8]    =   {0XAA,0X00,0XF5,0X00,0X01,0X01,0XF7,0XDD};
 //*RFCH
-unsigned char RFCH90225MHz[8] =   {0XAA,0X00,0XAB,0X00,0X01,0X00,0XAC,0XDD};
+byte RFCH90225MHz[8] =   {0XAA,0X00,0XAB,0X00,0X01,0X00,0XAC,0XDD};
 //*Region
-unsigned char USRegion[8]     =   {0XAA,0X00,0X07,0X00,0X01,0X02,0X0A,0XDD};
+byte USRegion[8]     =   {0XAA,0X00,0X07,0X00,0X01,0X02,0X0A,0XDD};
 //*PA Power
-unsigned char PA185DBM[9]     =   {0XAA,0X00,0XB6,0X00,0X02,0X07,0XA3,0XF9,0XDD};
+byte PA185DBM[9]     =   {0XAA,0X00,0XB6,0X00,0X02,0X07,0XA3,0XF9,0XDD};
 ///****************************///
 
 //********** Env Parameter **********//
-unsigned char lastEpcArr[10] =   {0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00};
+byte oldEPC[11]   =   {0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00};
+byte newEPC[11]   =   {0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00};
 unsigned int timeSec = 0;
 unsigned int timemin = 0;
 unsigned int firebaseSec = 0;
@@ -33,22 +36,22 @@ unsigned int dataAdd = 0;
 unsigned int incomedate = 0;
 unsigned int parState = 0;
 unsigned int codeState = 0;
-int stackArrayCheck = 10;
-String path = "records/";
-String lastEpc = "";
-String state = "i";
-String mechineNumber = "";
-bool firebaseError = false;
-bool display = true;
+int stackArrayCheck = 12;
 int address = 0;
 int lastEpcNumber = 1;
 int currentFloor = 1;
 int bedNumber = 1;
+String path = "records/";
+String state = "i";
+String mechineNumber = "";
 String WIFI_SSID = "";
 String WIFI_PASSWORD = "";
 String FIREBASE_HOST = "";
 String FIREBASE_AUTH = "";
 bool sameEpc = false;
+bool firebaseError = false;
+bool display = true;
+bool stopReadingState = false;
 //***********************************//
 
 void setup() {
@@ -245,16 +248,34 @@ void changeState(){
 }
 
 void databaseState(){
-  readMultiCommand();
-  if(state == "d"){
-    read();
+  if(stopReadingState == false && state == "d"){
+    readMultiCommand();
+  }else if(stopReadingState == true && state == "d"){
+    stopReading();
+  }
+  multipleReading();
+}
+
+unsigned int readTimer = 0;
+unsigned int sendCommandTimer = 0;
+void readState(){
+  epcExcute();
+  // if(millis() - readTimer > 5000){
+  //   printEPC();
+  //   readTimer = millis();
+  // }
+  if(difEPC()){
+    printEPC();
   }
 }
 
-void readState(){
-  readMultiCommand();
-  if(state == "r"){
-    read();
+unsigned int mock = 0;
+
+void mockFirebase(){
+  mock++;
+  if(mock > 10000){
+    stopReadingState = false;
+    mock = 0;
   }
 }
 
@@ -337,89 +358,89 @@ int EEPROM_write(int index, String text){
 
 /************************************************* R200 **************************************************/
 
-void readMultiCommand(){
-  if(millis() - timeSec > 1000){
-    R200Serial.write(ReadMulti,10);
-    timeSec = millis();
-  }
-}
-
-void read(){
-  timeSec ++ ;
-  if(timeSec >= 50000){
-    timemin ++;
-    timeSec = 0;
-    if(timemin >= 20){
-      timemin = 0;
-      R200Serial.write(ReadMulti,10);
+void epcExcute(){
+  if(millis() - sendCommandTimer > 500){
+    if(stopReadingState){
+      stopReading();
+    }else{
+      readMultiCommand();
     }
+    sendCommandTimer = millis();
   }
   multipleReading();
 }
 
+void readMultiCommand(){
+  R200Serial.write(ReadSingle,9);
+}
+
+void stopReading(){
+  R200Serial.write(stopRead,7);
+}
+
+void printEPC(){
+  Serial.print("EPC: ");
+  for(int x = 11 ; x != 1 ; x-=1){
+    if(newEPC[x] < 16){
+      Serial.print("0");
+      Serial.print(newEPC[x], HEX);
+      Serial.print(" ");
+    }else{
+      Serial.print(newEPC[x], HEX);
+      Serial.print(" ");
+    }
+  }
+  Serial.println(" ");
+}
+
+bool difEPC(){
+  int stack = 0;
+  for(int x = 0 ; x < 11 ; x++){
+    if(oldEPC[x] != newEPC[x]){
+      stack++;      
+    }
+    oldEPC[x] = newEPC[x];
+  }
+  if(stack > 0){
+    return true;
+  }else{
+    return false;
+  }
+}
+
 void multipleReading(){
-  String epc = "";
   if(R200Serial.available() > 0){
     incomedate = R200Serial.read();
-    if((incomedate == 0x02)&(parState == 0))
-    {
-      parState = 1;
-    }
-    else if((parState == 1)&(incomedate == 0x22)&(codeState == 0)){  
+    if((incomedate == 0x02)&(parState == 0)){
+        parState = 1;
+    }else if((parState == 1)&(incomedate == 0x22)&(codeState == 0)){  
         codeState = 1;
         dataAdd = 3;
-    }
-    else if(codeState == 1){
-      dataAdd ++;
-      if(dataAdd == 6)
-      {
-        // Serial.print("RSSI:"); 
-        // Serial.println(incomedate, HEX); 
-        }
-       else if((dataAdd == 7)|(dataAdd == 8)){
-        if(dataAdd == 7){
-          // Serial.print("PC:"); 
-          // Serial.print(incomedate, HEX);
-        }
-        else {
-          //  Serial.println(incomedate, HEX);
-        }
-       }
-       else if((dataAdd >= 9)&(dataAdd <= 20)){
-         if(dataAdd > 10){
-           if(lastEpcArr[dataAdd - 9] == incomedate){
-            // lastEpcArr[dataAdd - 9] = incomedate;
-            stackArrayCheck--;
-            // Serial.printf("DEBUG STACK ARRAY : %d \n", stackArrayCheck);
-          }else{
-            lastEpcArr[dataAdd - 9] = incomedate;
+    }else if(codeState == 1){
+        dataAdd ++;
+        if(dataAdd == 6){
+          // Serial.print("RSSI:"); 
+          // Serial.println(incomedate, HEX); 
+        }else if((dataAdd == 7)|(dataAdd == 8)){
+          if(dataAdd == 7){
+            // Serial.print("PC:"); 
+            // Serial.print(incomedate, HEX);
+          }else {
+            //  Serial.println(incomedate, HEX);
           }
+        }else if((dataAdd >= 9)&(dataAdd <= 20)){
+          newEPC[dataAdd - 9] = incomedate;
+        }else if(dataAdd >= 21){
+          dataAdd= 0;
+          parState = 0;
+          codeState = 0;
         }
-       }
-       else if(dataAdd >= 21){
-        if(stackArrayCheck == 0){
-          sameEpc = true;
-        }else{
-          Serial.print("EPC: ");
-          for(int x = 12 ; x != 0 ; x--){
-            Serial.print(lastEpcArr[x], HEX);
-            Serial.print(" ");
-          }
-          Serial.println(" ");
-          sameEpc = false;
-        }
-        stackArrayCheck = 12;
+      }else{
         dataAdd= 0;
         parState = 0;
         codeState = 0;
-        }
     }
-     else{
-      dataAdd= 0;
-      parState = 0;
-      codeState = 0;
-    }
-  }
+  }  
 }
 
 /************************************************* R200 **************************************************/
