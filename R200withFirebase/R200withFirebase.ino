@@ -56,14 +56,14 @@ int bedNumber            = 1;
 int hourNow, minuteNow, secondNow;
 String path              = "records/";
 String mechineNumber     = "";
-String WIFI_SSID         = "2.4F";
-String WIFI_PASSWORD     = "abcdefgh";
-String FIREBASE_HOST     = "https://bed-tracking-90a24-default-rtdb.asia-southeast1.firebasedatabase.app/";
-String FIREBASE_AUTH     = "zzggUuynwOOo9LnLkEXFqP3fVnqZb0PGXE7GfqOD";
+String WIFI_SSID         = "";
+String WIFI_PASSWORD     = "";
+String FIREBASE_HOST     = "";
+String FIREBASE_AUTH     = "";
 bool firebaseError       = false;
 bool display             = true;
 String state             = "";
-const long offsetTime    = 0;
+const long offsetTime    = 25000;
 int distanceReading      = 0;
 int EXECUTE_COMMAND_TIMER= 0;
 int WAITING_COMMAND_TIMER= 0;
@@ -211,8 +211,6 @@ void req_time(bool display){
     minuteNow = timeClient.getMinutes();
     hourNow   = timeClient.getHours();
     epochTime = timeClient.getEpochTime();
-    // print_epc_char();
-    // print_epc();
     if(display){
       Serial.print(hourNow);
       Serial.print(":");
@@ -239,6 +237,27 @@ void ping_firebase(){
     Firebase.setInt(firebaseSettingReader, "/setting/" + mechineNumber + "/LastTimePing", ping);
     pingTimer = millis();
   }
+}
+
+void streamSettingCallback(StreamData data){
+  if(data.streamPath() == "/envConfig/READING_DISTANCE" && data.dataType() == "int"){
+    distanceReading = data.intData();
+    Serial.println(distanceReading);
+  }
+  if(data.streamPath() == "/envConfig/WAITING_COMMAND_TIMER" && data.dataType() == "int"){
+    WAITING_COMMAND_TIMER = data.intData();
+    Serial.println(WAITING_COMMAND_TIMER);
+  }
+  if(data.streamPath() == "/envConfig/EXECUTE_COMMAND_TIMER" && data.dataType() == "int"){
+    EXECUTE_COMMAND_TIMER = data.intData();
+    Serial.println(EXECUTE_COMMAND_TIMER);
+  }
+}
+
+void streamSettingTimeoutCallback(bool timeout){
+  if(timeout){
+    Serial.println("Stream timeout, resume streaming...");
+  }  
 }
 
 void setup_mechine(bool check){
@@ -270,6 +289,7 @@ void setup_mechine(bool check){
     Serial.println("REASON: " + firebaseSettingReader.errorReason());
     Serial.println();
   }else{
+    // Firebase.setStreamCallback(firebaseSettingReader, streamSettingCallback, streamSettingTimeoutCallback);
     Serial.println("Firebase Streaming on setting path");
     Serial.println();
   }
@@ -278,6 +298,7 @@ void setup_mechine(bool check){
     Serial.println("REASON: " + firebaseSettingReader.errorReason());
     Serial.println();
   }else{
+    // Firebase.setStreamCallback(firebaseEnvConfig, streamSettingCallback, streamSettingTimeoutCallback);
     Serial.println("Firebase Streaming on envConfig path");
     Serial.println();
     if(Firebase.getInt(firebaseEnvConfig, "/envConfig/READING_DISTANCE")){
@@ -300,43 +321,24 @@ void setup_mechine(bool check){
 
 void insert_firebase(String dirpath, String data){
   FirebaseJson epcJsonData;
-  epcJsonData.set("tag number", lastEpcNumber);
-  epcJsonData.set("current floor", 1);
+  epcJsonData.set("currentFloor", currentFloor);
   epcJsonData.set("status", false);
-  epcJsonData.set("bed number", bedNumber);
-  if(Firebase.setJSON(firebaseDataReader, dirpath + data , epcJsonData)){
-    Serial.println("Firebase Created");
-    Serial.println();
-    lastEpcNumber ++;
-    if(lastEpcNumber % 2 == 0){
-      bedNumber++;
-    }
-  }else{
+  if(!Firebase.setJSON(firebaseDataReader, dirpath + "/" + data , epcJsonData)){
     Serial.println("Cannot Created");
     Serial.println("Firebase Reason: " + firebaseDataReader.errorReason());
     Serial.println();
   }
-  
 }
 
-void update_firebase(String data){
+void update_firebase(String dirpath, String data){
   FirebaseJson epcJsonData;
-  epcJsonData.set("current floor", currentFloor);
-  epcJsonData.set("status", !Firebase.getBool(firebaseDataReader, path + data));
-  if(Firebase.updateNode(firebaseDataReader, path + data, epcJsonData)){
-    Serial.println("Firebase Updated");
-    Serial.println();
-  }else{
+  epcJsonData.set("currentFloor", currentFloor);
+  epcJsonData.set("status", !Firebase.getBool(firebaseDataReader, path + "/" + data + "/status"));
+  if(!Firebase.updateNode(firebaseDataReader, dirpath + "/" + data, epcJsonData)){
     Serial.println("Cannot Updated");
     Serial.println("Firebase Reason: " + firebaseDataReader.errorReason());
     Serial.println();
-  }  
-}
-
-void create_array(){
-  for(int x ; x != 11 ; x++){
-    firebaseArrayData.add(epc[x]);    
-  }  
+  }
 }
 
 /*********************************************** FIREBASE ************************************************/
@@ -393,8 +395,7 @@ void change_state(){
       state = Serial.readString();
       state.trim();
       Serial.print("STATE SELECTED : ");
-      Serial.println(state);
-      // state.trim();   
+      Serial.println(state); 
       display = true;  
   }
 }
@@ -404,20 +405,24 @@ unsigned long insert_timer = 0;
 void database_state(){
   read_ultra();
   execute_command_and_recive(false, (cm < 10));
-  if(millis() - insert_timer > 1000){
-    Serial.println(string_epc());
+  if(millis() - insert_timer > 1000 && cm < 10){
+    insert_firebase("logs",string_epc());
     insert_timer = millis();
   }
 }
 
 void test_state(){
-  // read_ultra();
-  // execute_command_and_recive(true, (cm < 200));
+  read_ultra();
+  execute_command_and_recive(true, (cm < 200));
 }
 
 void read_state(){
   read_ultra();
   execute_command_and_recive(false, (cm < distanceReading));
+  if(cm < distanceReading && millis() - insert_timer > 1000){
+    update_firebase("logs", string_epc());
+    insert_timer = millis();
+  }
 }
 
 /******************************************* STATE MANAGEMENT ********************************************/
@@ -534,9 +539,9 @@ String string_epc(){
       // Serial.print(epc[x], HEX);
       // Serial.print(" ");
     }
-    if(x != 10){
-      text = text + " ";
-    }
+    // if(x != 10){
+      // text = text + " ";
+    // }
   }  
   return text;
 }
