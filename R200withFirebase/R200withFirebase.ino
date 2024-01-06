@@ -54,22 +54,28 @@ int lastEpcNumber        = 1;
 int currentFloor         = 1;
 int bedNumber            = 1;
 int hourNow, minuteNow, secondNow;
-String path              = "records/";
 String mechineNumber     = "";
-String WIFI_SSID         = "";
-String WIFI_PASSWORD     = "";
-String FIREBASE_HOST     = "";
-String FIREBASE_AUTH     = "";
+String WIFI_SSID         = "2.4F";
+String WIFI_PASSWORD     = "abcdefgh";
+#define API_KEY "API_KEY"
+#define DATABASE_URL "URL"
+#define USER_EMAIL "USER_EMAIL"
+#define USER_PASSWORD "USER_PASSWORD"
 bool firebaseError       = false;
 bool display             = true;
 String state             = "";
-const long offsetTime    = 25000;
+const long offsetTime    = 25200;
 int distanceReading      = 0;
 int EXECUTE_COMMAND_TIMER= 0;
 int WAITING_COMMAND_TIMER= 0;
 
 WiFiUDP ntpUDP;
 NTPClient timeClient(ntpUDP, "pool.ntp.org", offsetTime);
+// Define the FirebaseAuth data for authentication data
+FirebaseAuth auth;
+
+// Define the FirebaseConfig data for config data
+FirebaseConfig config;
 //***********************************//
 
 //* STATE MANAGE MENT **//
@@ -112,7 +118,7 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   while (WiFi.status() != WL_CONNECTED) { 
     Serial.print(".");
-    delay(500);
+    delay(1000);
   }
   Serial.println();
   Serial.print("connected: ");
@@ -137,7 +143,11 @@ void setup() {
   //     break;
   //   }
   // }
-  Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+  config.host = "https://bed-tracking-90a24-default-rtdb.asia-southeast1.firebasedatabase.app/";
+  config.api_key = "AIzaSyD7pDpNjtjMXjubiqmcclOmHdfrEPts0-U";
+  auth.user.email = "admin@hotmail.com";
+  auth.user.password = "thankyou123";
+  Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
   if(EEPROM.read(address)>0){
     setup_mechine(false);
@@ -333,7 +343,7 @@ void insert_firebase(String dirpath, String data){
 void update_firebase(String dirpath, String data){
   FirebaseJson epcJsonData;
   epcJsonData.set("currentFloor", currentFloor);
-  epcJsonData.set("status", !Firebase.getBool(firebaseDataReader, path + "/" + data + "/status"));
+  epcJsonData.set("status", !Firebase.getBool(firebaseDataReader, dirpath + "/" + data + "/status"));
   if(!Firebase.updateNode(firebaseDataReader, dirpath + "/" + data, epcJsonData)){
     Serial.println("Cannot Updated");
     Serial.println("Firebase Reason: " + firebaseDataReader.errorReason());
@@ -529,26 +539,15 @@ void print_epc_char(){
 String string_epc(){
   String text = "";
   for(int x = 0 ; x != 11 ; x+=1){
-    if(epc[x] < 16){
-      // Serial.print("0");
-      // Serial.print(epc[x], HEX);
-      // Serial.print(" ");
-      text = text + "0" + String(epc[x], HEX);
-    }else{
-      text = text + String(epc[x], HEX);
-      // Serial.print(epc[x], HEX);
-      // Serial.print(" ");
-    }
-    // if(x != 10){
-      // text = text + " ";
-    // }
+    epc[x] < 0x10 ? text = text + "0" + String(epc[x], HEX) : text = text + String(epc[x], HEX);
   }  
   return text;
 }
 
+int lead_data = 0;
 void read_response(){
   if(R200Serial.available() > 0){
-    incomedate = R200Serial.read();
+    incomedate = R200Serial.read();        
     if((incomedate == 0x02)&(parState == 0)){
         parState = 1;
     }else if((parState == 1)&(incomedate == 0x22)&(codeState == 0)){  
@@ -566,17 +565,20 @@ void read_response(){
           }
         }else if((dataAdd >= 9)&(dataAdd <= 20)){
           epc[dataAdd - 9] = incomedate;
-        }else if(dataAdd >= 21){
-          dataAdd= 0;
-          parState = 0;
-          codeState = 0;
+        }else{
+          lead_data++;
         }
-      }else{
-        dataAdd= 0;
-        parState = 0;
-        codeState = 0;
+    }else{
+      lead_data++;      
     }
-  }   
+  }else{
+    dataAdd= 0;
+    parState = 0;
+    codeState = 0;
+    Serial.print("DATA LEAD OUT : ");
+    Serial.println(lead_data);
+    lead_data = 0;
+  }
 }
 
 /************************************************* R200 **************************************************/
