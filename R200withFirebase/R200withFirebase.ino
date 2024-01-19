@@ -33,6 +33,7 @@ SoftwareSerial R200Serial(D8, D9);
 byte rssi              =    0x00;
 byte pc[2]             =   {0x00,0x00};
 byte epc[11]           =   {0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00};
+byte mem_epc[11]           =   {0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00,0X00};
 //*Inventory
 byte single_read[9]    =   {0XAA,0XAA,0X0E,0X00,0X02,0X10,0X08,0X28,0XDD};
 byte multi_read[10]    =   {0XAA,0X00,0X27,0X00,0X03,0X22,0XFF,0XFF,0X4A,0XDD};
@@ -55,8 +56,8 @@ int currentFloor         = 1;
 int bedNumber            = 1;
 int hourNow, minuteNow, secondNow;
 String mechineNumber     = "";
-String WIFI_SSID         = "2.4F";
-String WIFI_PASSWORD     = "abcdefgh";
+String WIFI_SSID         = "";
+String WIFI_PASSWORD     = "";
 #define API_KEY "API_KEY"
 #define DATABASE_URL "URL"
 #define USER_EMAIL "USER_EMAIL"
@@ -143,8 +144,8 @@ void setup() {
   //     break;
   //   }
   // }
-  config.host = "https://bed-tracking-90a24-default-rtdb.asia-southeast1.firebasedatabase.app/";
-  config.api_key = "AIzaSyD7pDpNjtjMXjubiqmcclOmHdfrEPts0-U";
+  config.host = "";
+  config.api_key = "";
   auth.user.email = "admin@hotmail.com";
   auth.user.password = "thankyou123";
   Firebase.begin(&config, &auth);
@@ -282,7 +283,7 @@ void setup_mechine(bool check){
   firebaseSettingJsonData.set("EEPROM address", address);
   firebaseSettingJsonData.set("LastTimePing", ping);
   if(check){
-    if(Firebase.pushJSON(firebaseSettingReader, "/setting", firebaseSettingJsonData)){
+    if(Firebase.pushJSON(firebaseSettingReader, "/setting/", firebaseSettingJsonData)){
       mechineNumber = firebaseSettingReader.pushName();
       int lenMsg = EEPROM_write(address, mechineNumber);
       Serial.println("Create new Mechine");
@@ -294,7 +295,7 @@ void setup_mechine(bool check){
       }
     }
   }
-  if (!Firebase.beginStream(firebaseSettingReader, "/setting")){
+  if (!Firebase.beginStream(firebaseSettingReader, "/setting/" + mechineNumber)){
     Serial.println("Could not begin stream on setting path");
     Serial.println("REASON: " + firebaseSettingReader.errorReason());
     Serial.println();
@@ -410,15 +411,18 @@ void change_state(){
   }
 }
 
+#define INIT_COMMAND 0
+#define EXECUTE_COMMAND 1
+#define WAITING_COMMAND 2
+#define FINISH_COMMAND  3
+unsigned int timer1 = millis();
+int sub_state = INIT_COMMAND;
+
 bool finish_read = true;
 unsigned long insert_timer = 0;
 void database_state(){
   read_ultra();
   execute_command_and_recive(false, (cm < 10));
-  if(millis() - insert_timer > 1000 && cm < 10){
-    insert_firebase("logs",string_epc());
-    insert_timer = millis();
-  }
 }
 
 void test_state(){
@@ -429,10 +433,6 @@ void test_state(){
 void read_state(){
   read_ultra();
   execute_command_and_recive(false, (cm < distanceReading));
-  if(cm < distanceReading && millis() - insert_timer > 1000){
-    update_firebase("logs", string_epc());
-    insert_timer = millis();
-  }
 }
 
 /******************************************* STATE MANAGEMENT ********************************************/
@@ -445,13 +445,6 @@ unsigned long codeState      = 0;
 unsigned long command_timmer = 0;
 bool finisher               = false;
 
-#define INIT_COMMAND 0
-#define EXECUTE_COMMAND 1
-#define WAITING_COMMAND 2
-#define FINISH_COMMAND  3
-unsigned int timer1 = millis();
-int sub_state = INIT_COMMAND;
-
 void execute_command_and_recive(bool display , bool cm_checker){
   read_response();
   switch (sub_state){
@@ -462,7 +455,7 @@ void execute_command_and_recive(bool display , bool cm_checker){
       if(millis() - timer1 < EXECUTE_COMMAND_TIMER && cm_checker){
         R200Serial.write(multi_read,10);
       }
-      if(millis() - timer1 > EXECUTE_COMMAND_TIMER && cm_checker){
+      if(epc_trasnfer()){
         timer1 = millis();
         sub_state = WAITING_COMMAND;
       }
@@ -472,6 +465,14 @@ void execute_command_and_recive(bool display , bool cm_checker){
         R200Serial.write(stop_read,7);
       }
       if(millis() - timer1 > WAITING_COMMAND_TIMER && cm_checker){
+        switch(int_state){
+          case READ_STATE :
+            update_firebase("logs",string_epc());
+            break;
+          case DB_STATE :
+            insert_firebase("logs",string_epc());
+            break;
+        }
         timer1 = millis();
         sub_state = FINISH_COMMAND;
       }
@@ -539,8 +540,8 @@ void print_epc_char(){
 String string_epc(){
   String text = "";
   for(int x = 0 ; x != 11 ; x+=1){
-    epc[x] < 0x10 ? text = text + "0" + String(epc[x], HEX) : text = text + String(epc[x], HEX);
-  }  
+    mem_epc[x] < 0x10 ? text = text + "0" + String(mem_epc[x], HEX) : text = text + String(mem_epc[x], HEX);
+  }
   return text;
 }
 
@@ -548,36 +549,45 @@ int lead_data = 0;
 void read_response(){
   if(R200Serial.available() > 0){
     incomedate = R200Serial.read();        
-    if((incomedate == 0x02)&(parState == 0)){
+    if((incomedate == 0x02)&&(parState == 0)){
         parState = 1;
-    }else if((parState == 1)&(incomedate == 0x22)&(codeState == 0)){  
+    }else if((parState == 1)&&(incomedate == 0x22)&&(codeState == 0)){  
         codeState = 1;
         dataAdd = 3;
     }else if(codeState == 1){
         dataAdd ++;
         if(dataAdd == 6){
           rssi = incomedate;           
-        }else if((dataAdd == 7)|(dataAdd == 8)){
+        }else if((dataAdd == 7)||(dataAdd == 8)){
           if(dataAdd == 7){
-            pc[0] = incomedate;
+            epc[0] = incomedate;
           }else {
-            pc[1] = incomedate;
+            epc[1] = incomedate;
           }
-        }else if((dataAdd >= 9)&(dataAdd <= 20)){
+        }else if((dataAdd >= 9)&&(dataAdd <= 20)){
           epc[dataAdd - 9] = incomedate;
         }else{
-          lead_data++;
+          dataAdd= 0;
+          parState = 0;
+          codeState = 0;
         }
     }else{
-      lead_data++;      
+      dataAdd= 0;
+      parState = 0;
+      codeState = 0;
     }
+  }
+}
+
+bool epc_trasnfer(){
+  if(epc[11] != 0x00){
+    for(int x; x < 11 ; x++){
+      mem_epc[x] = epc[x];
+      epc[x] = 0x00;
+    }
+    return true;
   }else{
-    dataAdd= 0;
-    parState = 0;
-    codeState = 0;
-    Serial.print("DATA LEAD OUT : ");
-    Serial.println(lead_data);
-    lead_data = 0;
+    return false;
   }
 }
 
